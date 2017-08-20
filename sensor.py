@@ -146,7 +146,7 @@ class XMGateway(Device):
 
     def __init__(self, device_id):
         super(XMGateway, self).__init__(device_id)
-        self.device_list_ready = False
+        self.device_list = None
         self.rgb = ''
         self.illumination = 0
 
@@ -183,9 +183,9 @@ class XMGateway(Device):
         self.onGatewayLightData(data)
 
     def onDeviceList(self, data):
+        self.device_list = data
         self.readDevice(self.device_id)
-        self.readDevices(data)
-        self.device_list_ready = True
+        self.readDevices(self.device_list)
 
     def __str__(self):
         return '%s [%s] %s:%d, rgb: #%s, illumination: %d' % \
@@ -203,26 +203,29 @@ DEVICE_FACTORY_MAP = {
 
 class XMProtocol(DatagramProtocol):
 
-    def __init__(self, rules, timer_hook):
+    def __init__(self, rules, timer_hook, timeout_sec):
         self.rules = rules
         self.gateway = {}
         self.devices = {}
         self.lc = task.LoopingCall(self.onTimer)
         self.timer_hook = timer_hook
+        self.timeout_sec = timeout_sec
 
     def onTimer(self):
         if len(self.gateway) == 0:
             self.searchGateway()
         for gateway in self.gateway.values():
-            if not gateway.device_list_ready:
+            if not gateway.device_list:
                 gateway.getDevices()
+            else:
+                gateway.readDevices(gateway.device_list)
         if self.timer_hook is not None:
             self.timer_hook()
 
     def startProtocol(self):
         self.transport.joinGroup(MULTICAST_IP)
         self.searchGateway()
-        self.lc.start(3, False)
+        self.lc.start(self.timeout_sec, False)
 
     def searchGateway(self):
         data = b'{"cmd":"whois"}'
@@ -299,8 +302,8 @@ class XMProtocol(DatagramProtocol):
             self.onReport(json_data)
 
 
-def runLoop(rules={}, timer_hook=None):
-    proto = XMProtocol(rules, timer_hook)
+def runLoop(rules={}, timer_hook=None, timeout_sec=5):
+    proto = XMProtocol(rules, timer_hook, timeout_sec)
     reactor.listenMulticast(9898, proto, listenMultiple=True)
     reactor.run()
 

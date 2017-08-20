@@ -159,4 +159,4 @@ if __name__ == '__main__':
         '158d00010f3694': automation.onMotionEvent,
     }
 
-    runLoop(rules, automation.onTimer)
+    runLoop(rules, automation.onTimer, 30)
