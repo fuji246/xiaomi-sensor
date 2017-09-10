@@ -2,6 +2,10 @@ from twisted.internet.protocol import DatagramProtocol
 from twisted.internet import reactor, task
 import json
 import time
+import binascii
+from Crypto.Cipher import AES
+
+import settings
 
 MULTICAST_IP = '224.0.0.50'
 MULTICAST_PORT = 4321
@@ -20,9 +24,19 @@ logger.addHandler(hdlr)
 
 console = logging.StreamHandler()
 console.setFormatter(formatter)
-console.setLevel(logging.INFO)
+#console.setLevel(logging.INFO)
+console.setLevel(logging.DEBUG)
 logger.addHandler(console)
 
+IV = bytearray([
+    0x17, 0x99, 0x6d, 0x09, 0x3d, 0x28, 0xdd, 0xb3,
+    0xba, 0x69, 0x5a, 0x2e, 0x6f, 0x58, 0x56, 0x2e
+])
+
+def get_write_key(token):
+    aes = AES.new(settings.XIAOMI_PASSWORD, AES.MODE_CBC, str(IV))
+    ciphertext = aes.encrypt(token)
+    return binascii.hexlify(ciphertext)
 
 def json_beauti(json_data):
     return json.dumps(json_data, indent=4)
@@ -41,6 +55,7 @@ class Device(object):
 
     def __init__(self, device_id):
         self.device_id = device_id
+        self.short_id = 0
         self.battery = 100
         self.event = Event()
 
@@ -63,6 +78,13 @@ class Device(object):
 
     def onReadAck(self, data):
         pass
+
+    def prepareCtrlMsg(self, data):
+        message = '{"cmd":"write","model":"%s","sid":"%s","short_id":%s,"data":"%s"}'\
+            % (self.model, self.device_id, self.short_id, data)
+        json_data = json.loads(message)
+        logger.info('ctrl message: %s' % json_beauti(json_data))
+        return message
 
 
 class BatteryMixin(object):
@@ -144,11 +166,40 @@ class XMGateway(Device):
     min_illumination = 300
     max_illumination = 1300
 
+    ringstone_siren = 1
+    ringstone_alarm = 2
+    ringstone_countdown = 3
+    ringstone_ghost = 4
+    ringstone_rifle = 5
+    ringstone_battle = 6
+    ringstone_air_strike = 7
+    ringstone_bark = 8
+
+    # door bell
+    ringstone_dingdong = 10
+    ringstone_knock = 11
+    ringstone_amuse = 12
+    ringstone_phone = 13
+
+    ringstone_mimix = 20
+    ringstone_enthusuastic = 21
+    ringstone_guitar = 22
+    ringstone_piano = 23
+    ringstone_leisure = 24
+    ringstone_childhood = 25
+    ringstone_morning = 26
+    ringstone_mbox = 27
+    ringstone_orange = 28
+    ringstone_thinker = 29
+
+    ringstone_stop = 10000
+
     def __init__(self, device_id):
         super(XMGateway, self).__init__(device_id)
         self.device_list = None
         self.rgb = ''
         self.illumination = 0
+        self.token = ''
 
     def setTransport(self, ip, port, transport):
         self.ip = ip
@@ -171,10 +222,23 @@ class XMGateway(Device):
         for device_id in device_lst:
             self.readDevice(device_id)
 
+    def playRingTone(self, mid):
+        data = '{\\"mid\\":%s, \\"key\\":\\"%s\\"}' % (mid, get_write_key(self.token))
+        self.prepareCtrlMsg(data)
+        self.sendCmd(self.prepareCtrlMsg(data))
+
+    def stopRingTone(self):
+        self.playRingTone(XMGateway.ringstone_stop)
+
     def onGatewayLightData(self, data):
         self.rgb = str(hex(data['rgb']))[4:]
         self.illumination = int(data['illumination'])
         self.onEvent()
+
+    def updateToken(self, json_data):
+        if 'token' in json_data:
+            self.token = json_data['token']
+            logger.info("update token: %s" % self.token)
 
     def onReport(self, data):
         self.onGatewayLightData(data)
@@ -232,7 +296,9 @@ class XMProtocol(DatagramProtocol):
         logger.info('finding gateway: %s ...' % data)
         self.transport.write(data, (MULTICAST_IP, MULTICAST_PORT))
 
-    def getOrCreateDevice(self, device_id, model):
+    def getOrCreateDevice(self, json_data):
+        device_id = json_data['sid']
+        model = json_data['model']
         if device_id in self.devices:
             if self.devices[device_id].model == model:
                 return self.devices[device_id]
@@ -242,6 +308,7 @@ class XMProtocol(DatagramProtocol):
             if model in DEVICE_FACTORY_MAP:
                 model_class = DEVICE_FACTORY_MAP[model]
                 device = model_class(device_id)
+                device.short_id = json_data.get('short_id', 0)
                 self.devices[device_id] = device
                 if device_id in self.rules:
                     device.subscribe(self.rules[device_id])
@@ -260,18 +327,20 @@ class XMProtocol(DatagramProtocol):
         self.parseCmdData(json_data)
 
     def onReadAck(self, json_data):
-        device = self.getOrCreateDevice(json_data['sid'], json_data['model'])
+        device = self.getOrCreateDevice(json_data)
         if device:
             device.onReadAck(json_data['data'])
             logger.info('onReadAck, device: %s' % device)
 
     def onHeartBeat(self, json_data):
-        device = self.getOrCreateDevice(json_data['sid'], json_data['model'])
+        device = self.getOrCreateDevice(json_data)
+        if device.model == XMGateway.model:
+            device.updateToken(json_data)
         if device:
             device.onHeartBeat(json_data['data'])
 
     def onReport(self, json_data):
-        device = self.getOrCreateDevice(json_data['sid'], json_data['model'])
+        device = self.getOrCreateDevice(json_data)
         if device:
             device.onReport(json_data['data'])
 
@@ -284,8 +353,9 @@ class XMProtocol(DatagramProtocol):
         if cmd == 'iam' and json_data['model'] == 'gateway':
             device_id = json_data['sid']
             if device_id not in self.gateway:
-                gateway = self.getOrCreateDevice(json_data['sid'], json_data['model'])
+                gateway = self.getOrCreateDevice(json_data)
                 gateway.setTransport(json_data['ip'], int(json_data['port']), self.transport)
+                gateway.onEvent()
                 self.gateway[device_id] = gateway
                 logger.info('gateway found: %s' % gateway)
                 gateway.getDevices()
@@ -293,6 +363,7 @@ class XMProtocol(DatagramProtocol):
             device_id = json_data['sid']
             if device_id in self.gateway:
                 gateway = self.gateway[device_id]
+                gateway.updateToken(json_data)
                 gateway.onDeviceList(json_data['data'])
         elif cmd == 'read_ack':
             self.onReadAck(json_data)

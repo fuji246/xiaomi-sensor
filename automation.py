@@ -4,6 +4,8 @@ from sensor import *
 import settings
 import requests
 import datetime
+import os
+import time
 
 def IsBetweenTime(start_time, end_time):
     toMinutes = lambda h, m: 60 * int(h) + int(m)
@@ -92,6 +94,22 @@ class PurifyControl(OnOffControl):
     pass
 
 
+class HDMIControl():
+
+    def __init__(self):
+        self.on = True
+
+    def toggle(self):
+        if self.on:
+            os.system('sudo tvservice -o')
+            self.on = False
+        else:
+            os.system('sudo tvservice -p')
+            os.system('sudo chvt 9')
+            os.system('sudo chvt 7')
+            self.on = True
+
+
 class Automation(object):
 
     def __init__(self):
@@ -117,12 +135,16 @@ class Automation(object):
             settings.TURN_OFF_BEDROOM_PURIFY
         )
 
+        self.hdmi = HDMIControl()
+        self.gateway = None
+
     def onTimer(self):
         self.light.onTimer()
 
     def onGatewayEvent(self, device):
         logger.info('==> onGatewayEvent, %s' % device)
-    
+        self.gateway = device
+
     def onSensorHtEvent(self, device):
         logger.info('==> onSensorHtEvent, %s' % device)
         if device.humidity <= settings.HUMIDITY_LOWER_THRSHOLD:
@@ -141,6 +163,10 @@ class Automation(object):
             self.light.toggle()
         elif device.status == 'double_click':
             self.humidifier.turnOn()
+        elif device.status == 'long_click_press':
+            self.hdmi.toggle()
+        elif device.status == 'long_click_release':
+            pass
 
     def onMotionEvent(self, device):
         logger.info('==> onMotionEvent, %s' % device)
@@ -149,14 +175,22 @@ class Automation(object):
         elif device.status == 'no_motion':
             self.light.turnOffInValidTime()
 
+    def onDoorEvent(self, device):
+        logger.info('==> onDoorEvent, %s' % device)
+        if IsBetweenTime(settings.ALARM_START_TIME, settings.ALARM_END_TIME):
+            if device.status == 'open':
+                self.gateway.playRingTone(XMGateway.ringstone_siren)
+
 
 if __name__ == '__main__':
     automation = Automation() 
     rules = {
         'f0b429b442b1': automation.onGatewayEvent,
         '158d000119f5c2': automation.onSensorHtEvent,
-        '158d00010def50': automation.onSwitchEvent,
+        #'158d00010def50': automation.onSwitchEvent,
         '158d00010f3694': automation.onMotionEvent,
+        '158d000111a168': automation.onDoorEvent,
+        '158d000183525f': automation.onDoorEvent,
     }
 
-    runLoop(rules, automation.onTimer, 30)
+    runLoop(rules, automation.onTimer, 60*5)
