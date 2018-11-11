@@ -24,6 +24,9 @@ def validBetweenTime(start_time, end_time):
         def wrapper(*args, **kwargs):
             if IsBetweenTime(start_time, end_time):
                 func(*args, **kwargs)
+            else:
+                logger.warn('not validBetweenTime, %s - %s, %s' % \
+                    (start_time, end_time, datetime.datetime.now()))
         return wrapper
     return decoratorFunction
 
@@ -61,7 +64,7 @@ class LightControl(OnOffControl):
 
     validTime = validBetweenTime(settings.LIVING_ROOM_LIGHT_START_TIME, settings.LIVING_ROOM_LIGHT_END_TIME)
     
-    def __init__(self, on_url, off_url, toggle_url):
+    def __init__(self, toggle_url, on_url=None, off_url=None):
         super(LightControl, self).__init__(on_url, off_url)
         self.toggle_url = toggle_url
 
@@ -114,11 +117,14 @@ class Automation(object):
 
     def __init__(self):
         self.light = LightControl(
+            settings.TOOGLE_LIVING_ROOM_LIGHT_URL,
             settings.TURN_ON_LIVING_ROOM_LIGHT_URL,
             settings.TURN_OFF_LIVING_ROOM_LIGHT_URL,
-            settings.TOOGLE_LIVING_ROOM_LIGHT_URL
         )
         self.light.turnOff()
+
+        self.bedroom_light = LightControl(settings.TOOGLE_BED_ROOM_LIGHT_URL)
+        self.bedroom_light.turnOff()
 
         self.humidifier = HumidifierControl(
             settings.TURN_ON_BEDROOM_HUMIDIFIER,
@@ -160,7 +166,7 @@ class Automation(object):
     def onSwitchEvent(self, device):
         logger.info('==> onSwitchEvent, %s' % device)
         if device.status == 'click':
-            self.light.toggle()
+            self.bedroom_light.toggle()
         elif device.status == 'double_click':
             self.humidifier.turnOn()
         elif device.status == 'long_click_press':
@@ -172,7 +178,7 @@ class Automation(object):
         logger.info('==> onMotionEvent, %s' % device)
         if device.status == 'motion':
             self.light.turnOnInValidTime()
-        elif device.status == 'no_motion':
+        elif device.status == 'no_motion' and device.no_motion_seconds >= settings.NO_MOTION_TIMEOUT:
             self.light.turnOffInValidTime()
 
     def onDoorEvent(self, device):
@@ -187,7 +193,7 @@ if __name__ == '__main__':
     rules = {
         'f0b429b442b1': automation.onGatewayEvent,
         '158d000119f5c2': automation.onSensorHtEvent,
-        #'158d00010def50': automation.onSwitchEvent,
+        '158d00010def50': automation.onSwitchEvent,
         '158d00010f3694': automation.onMotionEvent,
         '158d000111a168': automation.onDoorEvent,
         '158d000183525f': automation.onDoorEvent,

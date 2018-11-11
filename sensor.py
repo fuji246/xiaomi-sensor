@@ -132,6 +132,7 @@ class XMSensorStatus(Device, BatteryMixin):
 
     def onReadAck(self, data):
         self.status = data.get('status', self.status)
+        self.battery = self.checkBattery(data)
         self.onEvent()
 
     def onHeartBeat(self, data):
@@ -153,6 +154,24 @@ class XMSensorMagnet(XMSensorStatus):
 class XMSensorMotion(XMSensorStatus):
 
     model = 'motion'
+
+    def __init__(self, device_id):
+        super(XMSensorMotion, self).__init__(device_id)
+        self.no_motion_seconds = 0
+
+    def onReport(self, data):
+        if 'status' in data:
+            self.status = data.get('status', self.status)
+            if 'motion' == self.status:
+                self.no_motion_seconds = 0
+        if 'no_motion' in data:
+            self.status = 'no_motion'
+            self.no_motion_seconds = int(data.get('no_motion'))
+        self.onEvent()
+
+    def __str__(self):
+        return '%s [%s] %d%%: %s, no motion seconds: %d' % \
+            (self.model, self.device_id, self.battery, self.status, self.no_motion_seconds)
 
 
 class XMSensorSwitch(XMSensorStatus):
@@ -223,7 +242,7 @@ class XMGateway(Device):
             self.readDevice(device_id)
 
     def playRingTone(self, mid):
-        data = '{\\"mid\\":%s, \\"key\\":\\"%s\\"}' % (mid, get_write_key(self.token))
+        data = '{\\"mid\\":%s, \\"key\\":\\"%s\\", \\"vol\\":100}' % (mid, get_write_key(self.token))
         self.prepareCtrlMsg(data)
         self.sendCmd(self.prepareCtrlMsg(data))
 
